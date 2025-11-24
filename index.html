@@ -136,6 +136,7 @@
     let previewReady = null;
     let xrSession = null;
     let hasPlacedOnce = false;
+    let cameraPermissionGranted = false;
 
     const up = new THREE.Vector3(0, 1, 0);
     const lookMat = new THREE.Matrix4();
@@ -198,6 +199,8 @@
     async function startARExperience() {
       const supported = await checkXRSupport();
       if (!supported) return;
+      const cameraOk = await requestCameraPermission();
+      if (!cameraOk) return;
       await startARSession();
     }
 
@@ -285,11 +288,18 @@
       await ensureVideoPlaying();
       const supported = await checkXRSupport();
       if (!supported) throw new Error('WebXR AR not supported');
-      const session = await navigator.xr.requestSession('immersive-ar', {
-        requiredFeatures: ['local'],
-        optionalFeatures: ['local-floor', 'dom-overlay'],
-        domOverlay: { root: document.body }
-      });
+      let session;
+      try {
+        session = await navigator.xr.requestSession('immersive-ar', {
+          requiredFeatures: ['local'],
+          optionalFeatures: ['local-floor', 'dom-overlay'],
+          domOverlay: { root: document.body }
+        });
+      } catch (err) {
+        console.error('Failed to start XR session:', err);
+        showUnsupported('AR 세션을 시작할 수 없습니다. HTTPS 접속 및 카메라 권한을 확인해주세요.');
+        throw err;
+      }
       xrSession = session;
       session.addEventListener('end', onSessionEnd);
       renderer.xr.setReferenceSpaceType('local');
@@ -509,6 +519,24 @@
         }
       })();
       return xrSupportPromise;
+    }
+
+    async function requestCameraPermission() {
+      if (cameraPermissionGranted) return true;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showUnsupported('카메라 권한을 요청할 수 없습니다. 브라우저 설정과 HTTPS 접속 여부를 확인해주세요.');
+        return false;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream.getTracks().forEach((t) => t.stop());
+        cameraPermissionGranted = true;
+        return true;
+      } catch (err) {
+        console.warn('Camera permission denied:', err);
+        showUnsupported('카메라 접근이 거부되었습니다. 브라우저 설정에서 카메라 권한을 허용한 뒤 다시 시도해주세요.');
+        return false;
+      }
     }
   </script>
 </body>
