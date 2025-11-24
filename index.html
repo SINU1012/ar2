@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <title>Site Preview AR Overlay</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: radial-gradient(circle at 15% 20%, rgba(255, 71, 87, 0.18), transparent 32%),
+             radial-gradient(circle at 80% 10%, rgba(0, 255, 235, 0.14), transparent 28%),
+             #05070d;
+      --panel: rgba(12, 14, 22, 0.78);
+      --border: rgba(255, 255, 255, 0.12);
+      --text: #eef1f7;
+      --muted: #a7b0c4;
+      --accent: #ff2d55;
+      --accent-2: #38f8d6;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #ffffff;
+      color: #0b0b12;
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+    }
+    #ui {
+      position: fixed;
+      top: 18px;
+      left: 18px;
+      right: 18px;
+      z-index: 5;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #gate {
+      position: fixed;
+      inset: 0;
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      z-index: 10;
+      text-align: center;
+      padding: 24px;
+    }
+    #ar-btn {
+      appearance: none;
+      border: 1px solid #d1d5db;
+      background: #ffffff;
+      color: #0f172a;
+      font-weight: 600;
+      font-size: 15px;
+      border-radius: 12px;
+      padding: 12px 18px;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+      transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+      pointer-events: auto;
+    }
+    #ar-btn:hover { background: #f8fafc; border-color: #cbd5e1; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08); transform: translateY(-1px); }
+    #ar-btn:active { transform: translateY(0); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); background: #eef2f7; }
+    #gate h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    #gate p {
+      margin: 0;
+      color: #6b7280;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    #visit-btn {
+      position: fixed;
+      top: 0;
+      left: 0;
+      transform: translate(-50%, -50%);
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.9);
+      color: #0f172a;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+      font-weight: 600;
+      font-size: 14px;
+      display: none;
+      z-index: 9;
+      pointer-events: auto;
+      transition: transform 0.12s ease, box-shadow 0.12s ease;
+    }
+    #visit-btn:hover { box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1); transform: translate(-50%, -50%) translateY(-1px); }
+    #visit-btn:active { transform: translate(-50%, -50%) translateY(0); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.1); }
+    .unsupported {
+      display: none;
+      margin-top: 10px;
+      background: rgba(255, 119, 0, 0.18);
+      border: 1px solid rgba(255, 119, 0, 0.5);
+      color: #ffd7b3;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    .unsupported.show { display: block; }
+    #unsupported a { color: #ffd7b3; text-decoration: underline; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div id="gate">
+    <h1>버튼을 누르시면 AR 콘텐츠가 시작됩니다.</h1>
+    <p>카메라 권한 필요 · 두 손가락 핀치로 크기 조정, 한 손가락 드래그로 이동</p>
+    <button id="ar-btn">AR 시작</button>
+    <div id="unsupported" class="unsupported"></div>
+  </div>
+  <button id="visit-btn">사이트로 이동</button>
+
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+    let camera, scene, renderer;
+    let previewGroup = null;
+    let previewMesh = null;
+    let glowMesh = null;
+    let videoEl = null;
+    let videoTexture = null;
+    let previewReady = null;
+    let xrSession = null;
+    let hasPlacedOnce = false;
+
+    const up = new THREE.Vector3(0, 1, 0);
+    const lookMat = new THREE.Matrix4();
+    const initialDepth = 1.0; // meters in front of camera
+    const previewScale = { base: 0.75, current: 0.75 }; // meters for width
+    const fallbackAspect = 1000 / 545; // fallback to original image ratio
+
+    const activePointers = new Map();
+    let hadMultiTouch = false;
+    const tapMoveMax = 18; // px
+    const tapTimeMax = 700; // ms
+    const tmpVec = new THREE.Vector3();
+    const tmpVec2 = new THREE.Vector3();
+    const tmpQuat = new THREE.Quaternion();
+    const clock = new THREE.Clock();
+
+    const gateEl = document.getElementById('gate');
+    const startBtn = document.getElementById('ar-btn');
+    const visitBtn = document.getElementById('visit-btn');
+    const unsupportedEl = document.getElementById('unsupported');
+
+    const showUnsupported = (msg) => {
+      unsupportedEl.textContent = msg;
+      unsupportedEl.classList.add('show');
+    };
+
+    startBtn.addEventListener('click', () => {
+      startARExperience().catch((err) => {
+        console.error(err);
+        waitForUserTap();
+      });
+    });
+
+    init();
+
+    function init() {
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      document.body.appendChild(renderer.domElement);
+
+      const hemi = new THREE.HemisphereLight(0xffffff, 0x222233, 1.1);
+      scene.add(hemi);
+
+      // Build the preview plane with a looping video texture
+      previewReady = createVideoPreview();
+
+      // Wait for explicit button tap to start
+      window.addEventListener('resize', onWindowResize);
+      animate();
+    }
+
+    async function startARExperience() {
+      await startARSession();
+    }
+
+    function createVideoPreview() {
+      if (previewReady) return previewReady;
+      previewReady = new Promise((resolve, reject) => {
+        videoEl = document.createElement('video');
+        videoEl.src = './videoar.mp4';
+        videoEl.loop = true;
+        videoEl.muted = true;
+        videoEl.playsInline = true;
+        videoEl.preload = 'auto';
+        videoEl.crossOrigin = 'anonymous';
+        videoEl.style.display = 'none';
+        document.body.appendChild(videoEl);
+
+        const handleError = (err) => reject(err || new Error('Video failed to load'));
+
+        const handleReady = () => {
+          const aspect = getVideoAspect();
+          const widthMeters = previewScale.base;
+          const heightMeters = widthMeters / aspect;
+
+          videoTexture = new THREE.VideoTexture(videoEl);
+          videoTexture.colorSpace = THREE.SRGBColorSpace;
+          videoTexture.minFilter = THREE.LinearFilter;
+          videoTexture.magFilter = THREE.LinearFilter;
+          videoTexture.generateMipmaps = false;
+
+          const material = new THREE.MeshBasicMaterial({
+            map: videoTexture,
+            side: THREE.DoubleSide,
+            transparent: true
+          });
+          const geometry = new THREE.PlaneGeometry(widthMeters, heightMeters);
+          previewMesh = new THREE.Mesh(geometry, material);
+
+          const glowMat = new THREE.MeshBasicMaterial({
+            color: 0x7cf2ff,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.18,
+            blending: THREE.AdditiveBlending
+          });
+          glowMesh = new THREE.Mesh(new THREE.PlaneGeometry(widthMeters * 1.06, heightMeters * 1.06), glowMat);
+          glowMesh.position.z = -0.0005;
+
+          previewGroup = new THREE.Group();
+          previewGroup.add(glowMesh);
+          previewGroup.add(previewMesh);
+          previewGroup.visible = false;
+          scene.add(previewGroup);
+          resolve();
+        };
+
+        if (videoEl.readyState >= HTMLMediaElement.HAVE_METADATA) {
+          handleReady();
+        } else {
+          videoEl.addEventListener('loadedmetadata', handleReady, { once: true });
+          videoEl.addEventListener('error', handleError, { once: true });
+        }
+      });
+      return previewReady;
+    }
+
+    function getVideoAspect() {
+      if (videoEl && videoEl.videoWidth && videoEl.videoHeight) {
+        return videoEl.videoWidth / videoEl.videoHeight;
+      }
+      return fallbackAspect;
+    }
+
+    async function ensureVideoPlaying() {
+      if (!videoEl) return;
+      try {
+        await videoEl.play();
+      } catch (err) {
+        console.warn('Video playback blocked:', err);
+      }
+    }
+
+    async function startARSession() {
+      if (xrSession) return xrSession;
+      await previewReady;
+      await ensureVideoPlaying();
+      const session = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['local'],
+        optionalFeatures: ['local-floor', 'dom-overlay'],
+        domOverlay: { root: document.body }
+      });
+      xrSession = session;
+      session.addEventListener('end', onSessionEnd);
+      renderer.xr.setReferenceSpaceType('local');
+      await renderer.xr.setSession(session);
+      hasPlacedOnce = false;
+      attachGestures();
+      gateEl.style.display = 'none';
+      if (previewGroup) {
+        placeFront(initialDepth);
+        previewGroup.scale.setScalar(previewScale.current / previewScale.base);
+      }
+      return session;
+    }
+
+    function onSessionEnd() {
+      xrSession = null;
+      if (previewGroup) previewGroup.visible = false;
+      gateEl.style.display = 'flex';
+      if (videoEl) videoEl.pause();
+    }
+
+    function waitForUserTap() {
+      const tapHandler = () => {
+        window.removeEventListener('touchend', tapHandler);
+        window.removeEventListener('click', tapHandler);
+        startARSession().catch((err) => {
+          console.error(err);
+          waitForUserTap();
+        });
+      };
+      window.addEventListener('touchend', tapHandler, { once: true });
+      window.addEventListener('click', tapHandler, { once: true });
+    }
+
+    function placeFront(distance) {
+      if (!previewGroup) return;
+      tmpVec.set(0, 0, -distance).applyQuaternion(camera.quaternion).add(camera.position);
+      previewGroup.position.copy(tmpVec);
+      previewGroup.quaternion.copy(camera.quaternion);
+      previewGroup.rotateY(Math.PI);
+      previewGroup.visible = true;
+      hasPlacedOnce = true;
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() {
+      renderer.setAnimationLoop(render);
+    }
+
+    function render() {
+      if (glowMesh && previewGroup && previewGroup.visible) {
+        const t = clock.getElapsedTime();
+        glowMesh.material.opacity = 0.12 + 0.06 * Math.sin(t * 2.4);
+        const scalePulse = 1 + 0.01 * Math.sin(t * 4.2);
+        glowMesh.scale.setScalar(scalePulse);
+      }
+      updateVisitButton();
+      renderer.render(scene, camera);
+    }
+
+    const proj = new THREE.Vector3();
+    function updateVisitButton() {
+      if (!previewGroup || !previewGroup.visible) {
+        visitBtn.style.display = 'none';
+        return;
+      }
+      proj.copy(previewGroup.position).project(camera);
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = (proj.x * 0.5 + 0.5) * rect.width + rect.left;
+      const y = (-proj.y * 0.5 + 0.5) * rect.height + rect.top - 24;
+      visitBtn.style.display = 'inline-flex';
+      visitBtn.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+    }
+
+    function attachGestures() {
+      const el = renderer.domElement;
+      el.style.touchAction = 'none';
+
+      el.addEventListener('pointerdown', onPointerDown);
+      el.addEventListener('pointermove', onPointerMove);
+      el.addEventListener('pointerup', onPointerUp);
+      el.addEventListener('pointercancel', onPointerUp);
+      el.addEventListener('pointerout', onPointerUp);
+      el.addEventListener('pointerleave', onPointerUp);
+    }
+
+    function onPointerDown(e) {
+      activePointers.set(e.pointerId, {
+        x: e.clientX,
+        y: e.clientY,
+        startX: e.clientX,
+        startY: e.clientY,
+        downTs: performance.now(),
+        movedTooFar: false
+      });
+      if (activePointers.size >= 2) hadMultiTouch = true;
+      if (!xrSession) return;
+      if (activePointers.size === 1 && previewGroup) {
+        placeFront(initialDepth);
+      }
+    }
+
+    function onPointerUp(e) {
+      const info = activePointers.get(e.pointerId);
+      activePointers.delete(e.pointerId);
+      const now = performance.now();
+      const isSingle = activePointers.size === 0 && !hadMultiTouch;
+      const duration = info ? now - info.downTs : Infinity;
+      const moved = info ? Math.hypot((info.x ?? e.clientX) - info.startX, (info.y ?? e.clientY) - info.startY) : Infinity;
+      const cleanTap = isSingle && info && duration < tapTimeMax && moved < tapMoveMax && !info.movedTooFar;
+      if (cleanTap && previewGroup && hitPreview(e)) {
+        visitBtn.click();
+      }
+      if (activePointers.size === 0) hadMultiTouch = false;
+      onPointerMove.startDist = undefined;
+      onPointerMove.startScale = undefined;
+    }
+
+    function onPointerMove(e) {
+      if (!previewGroup || activePointers.size === 0) return;
+      if (!activePointers.has(e.pointerId)) return;
+
+      const info = activePointers.get(e.pointerId);
+      info.x = e.clientX;
+      info.y = e.clientY;
+      const movedFromStart = Math.hypot(info.x - info.startX, info.y - info.startY);
+      if (movedFromStart > tapMoveMax) info.movedTooFar = true;
+      activePointers.set(e.pointerId, info);
+      const points = Array.from(activePointers.values());
+
+      if (points.length === 1) {
+        // drag: move along the camera-facing plane keeping current distance
+        const distance = previewGroup.position.distanceTo(camera.position) || initialDepth;
+        const { x, y } = points[0];
+        updatePositionFromScreen(x, y, distance);
+      } else if (points.length >= 2) {
+        // pinch: scale based on first two pointers
+        const [p1, p2] = points;
+        if (!onPointerMove.startDist) {
+          onPointerMove.startDist = dist(p1, p2);
+          onPointerMove.startScale = previewScale.current;
+        }
+        const factor = dist(p1, p2) / onPointerMove.startDist;
+        previewScale.current = clamp(onPointerMove.startScale * factor, 0.3, 2.5);
+        previewGroup.scale.setScalar(previewScale.current / previewScale.base);
+      }
+    }
+
+    function dist(a, b) {
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function clamp(val, min, max) {
+      return Math.min(max, Math.max(min, val));
+    }
+
+    function updatePositionFromScreen(clientX, clientY, distance) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -(((clientY - rect.top) / rect.height) * 2 - 1);
+      tmpVec.set(ndcX, ndcY, 0.5);
+      tmpVec.unproject(camera);
+      tmpVec.sub(camera.position).normalize();
+      tmpVec.multiplyScalar(distance);
+      previewGroup.position.copy(camera.position).add(tmpVec);
+
+      // keep facing the camera
+      tmpQuat.setFromRotationMatrix(lookMat.lookAt(previewGroup.position, camera.position, up));
+      previewGroup.quaternion.copy(tmpQuat);
+      previewGroup.rotateY(Math.PI);
+      hasPlacedOnce = true;
+    }
+
+    const raycaster = new THREE.Raycaster();
+    const pointerNDC = new THREE.Vector2();
+    function hitPreview(e) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNDC.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+      raycaster.setFromCamera(pointerNDC, camera);
+      const target = previewGroup || previewMesh;
+      if (!target) return false;
+      const hit = raycaster.intersectObject(target, true);
+      return hit.length > 0;
+    }
+
+    visitBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      window.location.href = 'http://www.infocus1.co.kr';
+    });
+  </script>
+</body>
+</html>
