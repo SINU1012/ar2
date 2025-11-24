@@ -137,6 +137,7 @@
     let xrSession = null;
     let hasPlacedOnce = false;
     let cameraPermissionGranted = false;
+    let xrSupportPromise = null;
 
     const up = new THREE.Vector3(0, 1, 0);
     const lookMat = new THREE.Matrix4();
@@ -498,7 +499,6 @@
       window.location.href = 'http://www.infocus1.co.kr';
     });
 
-    let xrSupportPromise = null;
     function checkXRSupport() {
       if (xrSupportPromise) return xrSupportPromise;
       xrSupportPromise = (async () => {
