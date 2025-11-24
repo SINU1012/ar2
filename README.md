@@ -19,3 +19,4 @@
 - WebXR AR은 HTTPS + Android 크롬 최신 버전에서 동작합니다.  
 - iOS Safari는 WebXR이 없어 AR 버튼이 표시되지 않을 수 있습니다(미래 버전에서 지원 시 자동 활성화).  
 - GH Pages/Netlify 등 HTTPS 호스팅으로 배포하면 QR 코드로 스캔해 바로 테스트할 수 있습니다.
+- AR 시작 버튼이 반응하지 않으면 HTTPS 접속 여부와 크롬에서 `immersive-ar` 지원 상태를 확인하세요. (지원 안 되면 상단에 안내 문구가 표시됨)
